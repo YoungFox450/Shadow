@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shadow/core/theme.dart';
+import 'package:shadow/features/home/lockdown_timer_screen.dart';
 import 'package:shadow/features/onboarding/onboarding_screen.dart';
 
 void main() {
@@ -15,7 +16,17 @@ class MyApp extends StatelessWidget {
       title: 'Shadow',
       debugShowCheckedModeBanner: false,
       theme: ShadowTheme.onboardingTheme,
-      home: const OnboardingScreen(),
+      home: Builder(
+        builder: (context) => OnboardingScreen(
+          onFinished: () {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (_) => const LockdownTimerScreen(),
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 }

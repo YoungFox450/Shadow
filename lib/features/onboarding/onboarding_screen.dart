@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shadow/core/theme.dart';
+import 'package:shadow/native/permissions_bridge.dart';
 
 /// Modèle de données pour les étapes de l'onboarding
 class _StepData {
@@ -60,7 +61,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     super.dispose();
   }
 
-  void _onNext() {
+  void _goToNext() {
     HapticFeedback.lightImpact();
     if (_currentIndex < 6) {
       _pageController.nextPage(
@@ -80,31 +81,29 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Indicateur de progression persistant (sauf sur les pages de chargement et permissions)
             _buildStaticProgressIndicator(),
-            
             Expanded(
               child: PageView(
                 controller: _pageController,
                 physics: const NeverScrollableScrollPhysics(),
                 onPageChanged: (index) => setState(() => _currentIndex = index),
                 children: [
-                  _StepPage(step: _steps[0], onNext: _onNext), // 0
-                  _StepPage(step: _steps[1], onNext: _onNext), // 1
-                  _StepPage(step: _steps[2], onNext: _onNext), // 2
+                  _StepPage(step: _steps[0], onNext: _goToNext), // 0
+                  _StepPage(step: _steps[1], onNext: _goToNext), // 1
+                  _StepPage(step: _steps[2], onNext: _goToNext), // 2
                   _LoadingPage(
                     key: const ValueKey('loading-before-permissions'),
-                    onReady: _onNext,
+                    onReady: _goToNext,
                   ), // 3
-                  _PermissionsPage(onContinue: _onNext), // 4
+                  _PermissionsPage(onContinue: _goToNext), // 4
                   _LoadingPage(
                     key: const ValueKey('loading-after-permissions'),
-                    onReady: _onNext,
+                    onReady: _goToNext,
                     delay: const Duration(milliseconds: 1400),
                     title: 'Configuration du\nverrouillage en cours',
                     subtitle: 'On vérifie que tout est bien activé avant de te laisser entrer.',
                   ), // 5
-                  _FinalPage(step: _steps[3], onNext: _onNext), // 6
+                  _FinalPage(step: _steps[3], onNext: _goToNext), // 6
                 ],
               ),
             ),
@@ -115,7 +114,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Widget _buildStaticProgressIndicator() {
-    // Les pages 3, 4 et 5 ne montrent pas les points de progression selon la logique du flow
     bool isVisible = _currentIndex < 3 || _currentIndex == 6;
     int activeDot = _currentIndex >= 6 ? 3 : _currentIndex;
 
@@ -142,11 +140,11 @@ class _StepDots extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: List.generate(total, (i) {
-        final isActive = i == activeIndex;
+        final active = i == activeIndex;
         return AnimatedContainer(
           duration: const Duration(milliseconds: 250),
           margin: const EdgeInsets.only(right: 8),
-          width: isActive ? 28 : 10,
+          width: active ? 28 : 10,
           height: 10,
           decoration: BoxDecoration(
             color: Colors.black,
@@ -158,14 +156,14 @@ class _StepDots extends StatelessWidget {
   }
 }
 
-/// Bouton principal stylisé
+/// Bouton pilule noir
 class _PillButton extends StatelessWidget {
   final String label;
   final VoidCallback onPressed;
   final bool enabled;
 
   const _PillButton({
-    required this.label, 
+    required this.label,
     required this.onPressed,
     this.enabled = true,
   });
@@ -199,7 +197,7 @@ class _PillButton extends StatelessWidget {
   }
 }
 
-/// Layout pour les étapes textuelles (1, 2, 3)
+/// Layout pour les étapes textuelles
 class _StepPage extends StatelessWidget {
   final _StepData step;
   final VoidCallback onNext;
@@ -240,7 +238,7 @@ class _StepPage extends StatelessWidget {
   }
 }
 
-/// Page de chargement réutilisable
+/// Page de chargement
 class _LoadingPage extends StatefulWidget {
   final VoidCallback onReady;
   final Duration delay;
@@ -310,7 +308,6 @@ class _LoadingPageState extends State<_LoadingPage> {
   }
 }
 
-/// Modèle pour les permissions
 class _PermissionItem {
   final IconData icon;
   final String title;
@@ -341,7 +338,7 @@ const List<_PermissionItem> _permissionItems = [
   ),
 ];
 
-/// Page détaillée des permissions
+/// Page de permissions connectée au natif avec observer de cycle de vie
 class _PermissionsPage extends StatefulWidget {
   final VoidCallback onContinue;
 
@@ -351,10 +348,61 @@ class _PermissionsPage extends StatefulWidget {
   State<_PermissionsPage> createState() => _PermissionsPageState();
 }
 
-class _PermissionsPageState extends State<_PermissionsPage> {
+class _PermissionsPageState extends State<_PermissionsPage>
+    with WidgetsBindingObserver {
   final List<bool> _granted = List<bool>.filled(_permissionItems.length, false);
+  bool _checking = true;
 
   bool get _allGranted => _granted.every((g) => g);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshStatuses();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshStatuses();
+    }
+  }
+
+  Future<void> _refreshStatuses() async {
+    final results = await Future.wait([
+      PermissionsBridge.isUsageAccessGranted(),
+      PermissionsBridge.isOverlayGranted(),
+      PermissionsBridge.isAccessibilityServiceEnabled(),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      for (var i = 0; i < results.length; i++) {
+        _granted[i] = results[i];
+      }
+      _checking = false;
+    });
+  }
+
+  Future<void> _requestPermission(int index) async {
+    switch (index) {
+      case 0:
+        await PermissionsBridge.requestUsageAccess();
+        break;
+      case 1:
+        await PermissionsBridge.requestOverlay();
+        break;
+      case 2:
+        await PermissionsBridge.requestAccessibilityService();
+        break;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -375,7 +423,7 @@ class _PermissionsPageState extends State<_PermissionsPage> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Chaque permission ci-dessous est nécessaire pour que le verrouillage fonctionne correctement.',
+            'Chaque permission ci-dessous est nécessaire pour que le verrouillage fonctionne correctement. Tape sur "Activer" pour ouvrir le réglage Android correspondant.',
             style: GoogleFonts.spaceMono(
               fontSize: 13,
               height: 1.5,
@@ -393,14 +441,16 @@ class _PermissionsPageState extends State<_PermissionsPage> {
                 return _PermissionCard(
                   item: item,
                   granted: _granted[index],
-                  onChanged: (value) => setState(() => _granted[index] = value),
+                  onTap: () => _requestPermission(index),
                 );
               },
             ),
           ),
           const SizedBox(height: 16),
           _PillButton(
-            label: _allGranted ? 'Continuer' : 'Autorise tout pour continuer',
+            label: _checking
+                ? 'Vérification...'
+                : (_allGranted ? 'Continuer' : 'Autorise tout pour continuer'),
             onPressed: _allGranted ? widget.onContinue : () {},
             enabled: _allGranted,
           ),
@@ -410,76 +460,108 @@ class _PermissionsPageState extends State<_PermissionsPage> {
   }
 }
 
-/// Carte de permission individuelle
+/// Carte de permission avec bouton / badge
 class _PermissionCard extends StatelessWidget {
   final _PermissionItem item;
   final bool granted;
-  final ValueChanged<bool> onChanged;
+  final VoidCallback onTap;
 
   const _PermissionCard({
     required this.item,
     required this.granted,
-    required this.onChanged,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: ShadowColors.statBoxBackground,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
         borderRadius: BorderRadius.circular(16),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.black,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(item.icon, color: ShadowColors.primaryGreen, size: 20),
+        onTap: granted ? null : onTap,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: ShadowColors.statBoxBackground,
+            borderRadius: BorderRadius.circular(16),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.title,
-                  style: GoogleFonts.spaceMono(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                    color: Colors.black,
-                  ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(10),
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  item.description,
-                  style: GoogleFonts.spaceMono(
-                    fontSize: 11,
-                    height: 1.4,
-                    color: Colors.black.withOpacity(0.75),
-                  ),
+                child: Icon(item.icon, color: ShadowColors.primaryGreen, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.title,
+                      style: GoogleFonts.spaceMono(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                        color: Colors.black,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      item.description,
+                      style: GoogleFonts.spaceMono(
+                        fontSize: 11,
+                        height: 1.4,
+                        color: Colors.black.withOpacity(0.75),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: granted
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.check, size: 14, color: ShadowColors.primaryGreen),
+                          const SizedBox(width: 4),
+                          Text(
+                            'OK',
+                            style: GoogleFonts.spaceMono(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: ShadowColors.primaryGreen,
+                            ),
+                          ),
+                        ],
+                      )
+                    : Text(
+                        'Activer',
+                        style: GoogleFonts.spaceMono(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: ShadowColors.primaryGreen,
+                        ),
+                      ),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          Switch(
-            value: granted,
-            onChanged: onChanged,
-            activeColor: Colors.black,
-            activeTrackColor: Colors.black.withOpacity(0.35),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-/// Boîte de statistique
+/// Boîte de statistiques
 class _StatBox extends StatelessWidget {
   final String value;
   final String label;
