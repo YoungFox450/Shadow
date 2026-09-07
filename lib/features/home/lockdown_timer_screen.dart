@@ -1,7 +1,11 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:shadow/core/theme.dart';
+
+const Color _homeBlue = Color(0xFF2498E8);
+const Color _homeHeaderBlue = Color(0xFF496594);
 
 enum LockdownTab { timer, stats, settings }
 
@@ -13,8 +17,14 @@ class LockdownTimerScreen extends StatefulWidget {
 }
 
 class _LockdownTimerScreenState extends State<LockdownTimerScreen> {
+  static const _stepMinutes = 15;
+  static const _minimumMinutes = 15;
+  static const _maximumMinutes = 24 * 60;
+
   int _selectedMinutes = 15;
   LockdownTab _currentTab = LockdownTab.timer;
+  double _wheelDragDistance = 0;
+  bool _wheelChangedDuringDrag = false;
 
   static const List<_Preset> _presets = [
     _Preset(minutes: 15, bigLabel: '15', smallLabel: 'minutes'),
@@ -24,21 +34,70 @@ class _LockdownTimerScreenState extends State<LockdownTimerScreen> {
     _Preset(minutes: 120, bigLabel: '2', smallLabel: 'hours'),
   ];
 
-  String get _formattedDuration {
-    final hours = _selectedMinutes ~/ 60;
-    final minutes = _selectedMinutes % 60;
-    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}';
+  String get _formattedDuration => _formatDuration(_selectedMinutes);
+
+  void _selectMinutes(int minutes, {bool preserveDrag = false}) {
+    if (minutes == _selectedMinutes) return;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _selectedMinutes = minutes;
+      if (!preserveDrag) _wheelDragDistance = 0;
+    });
   }
 
-  void _selectMinutes(int minutes) {
-    HapticFeedback.selectionClick();
-    setState(() => _selectedMinutes = minutes);
+  void _handleWheelDragStart(DragStartDetails _) {
+    _wheelDragDistance = 0;
+    _wheelChangedDuringDrag = false;
+  }
+
+  void _handleWheelDragUpdate(DragUpdateDetails details) {
+    _wheelDragDistance += details.delta.dy;
+    const threshold = 34.0;
+    while (_wheelDragDistance.abs() >= threshold) {
+      // Le geste suit l'écran : vers le haut, on avance dans les durées.
+      final direction = _wheelDragDistance < 0 ? 1 : -1;
+      final next = (_selectedMinutes + direction * _stepMinutes)
+          .clamp(_minimumMinutes, _maximumMinutes)
+          .toInt();
+      if (next == _selectedMinutes) {
+        _wheelDragDistance = 0;
+        break;
+      }
+      _selectMinutes(next, preserveDrag: true);
+      _wheelChangedDuringDrag = true;
+      _wheelDragDistance += _wheelDragDistance < 0 ? threshold : -threshold;
+    }
+
+    // Repeint aussi pendant le déplacement, même avant le prochain pas de
+    // 15 minutes, afin que le cadran colle réellement au geste.
+    if (mounted) setState(() {});
+  }
+
+  void _handleWheelDragEnd(DragEndDetails _) {
+    if (_wheelDragDistance == 0) {
+      _wheelChangedDuringDrag = false;
+      return;
+    }
+
+    final next = _wheelChangedDuringDrag
+        ? _selectedMinutes
+        : (_selectedMinutes + (_wheelDragDistance < 0 ? 1 : -1) * _stepMinutes)
+            .clamp(_minimumMinutes, _maximumMinutes)
+            .toInt();
+    _wheelDragDistance = 0;
+    _wheelChangedDuringDrag = false;
+
+    if (next != _selectedMinutes) {
+      _selectMinutes(next, preserveDrag: true);
+    } else if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: ShadowColors.primaryGreen,
+      backgroundColor: _homeBlue,
       body: SafeArea(
         bottom: false,
         child: Column(
@@ -59,102 +118,154 @@ class _LockdownTimerScreenState extends State<LockdownTimerScreen> {
   }
 
   Widget _buildTimerBody() {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final timerSize = (screenWidth * 0.255).clamp(78.0, 128.0).toDouble();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 28, 0, 20),
+      padding: const EdgeInsets.fromLTRB(26, 0, 26, 36),
       child: Column(
         children: [
-          // Gros chrono central
+          Transform.translate(
+            offset: const Offset(14, 8),
+            child: const Align(
+              alignment: Alignment.centerRight,
+              child: _PageDots(),
+            ),
+          ),
+          SizedBox(height: screenWidth * 0.215),
           Text(
             _formattedDuration,
             style: GoogleFonts.spaceMono(
-              fontSize: 76,
+              fontSize: timerSize,
               fontWeight: FontWeight.w900,
-              letterSpacing: 2,
-              height: 1.0,
+              letterSpacing: -2,
+              height: 1,
               color: Colors.black,
             ),
           ),
-          const SizedBox(height: 36),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.only(right: 24),
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Colonne de gauche : 15 min / 30 min / 1 heure
-                      Expanded(
-                        flex: 3,
-                        child: Column(
-                          children: [
-                            Expanded(child: _presetTile(_presets[0])),
-                            const SizedBox(height: 12),
-                            Expanded(child: _presetTile(_presets[1])),
-                            const SizedBox(height: 12),
-                            Expanded(child: _presetTile(_presets[2])),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      // Colonne de droite : 1:30 en haut, 2 heures (double hauteur)
-                      Expanded(
-                        flex: 3,
-                        child: Column(
-                          children: [
-                            Expanded(child: _presetTile(_presets[3])),
-                            const SizedBox(height: 12),
-                            Expanded(flex: 2, child: _presetTile(_presets[4])),
-                          ],
-                        ),
-                      ),
-                      // Espace réservé pour la molette
-                      const Expanded(flex: 3, child: SizedBox()),
-                    ],
-                  ),
-                  Positioned(
-                    top: 0,
-                    bottom: 0,
-                    right: -40,
-                    width: 230,
-                    child: _DurationWheelPicker(
-                      selectedMinutes: _selectedMinutes,
-                      onChanged: _selectMinutes,
+          SizedBox(height: screenWidth * 0.16),
+          Expanded(child: _buildCentralZone(screenWidth)),
+          const SizedBox(height: 26),
+          _LockdownButton(
+            onTap: () {
+              HapticFeedback.heavyImpact();
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Shadow verrouillé pour $_formattedDuration',
+                    style: GoogleFonts.spaceMono(
+                      color: Colors.black,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 20),
-          Padding(
-            padding: const EdgeInsets.only(right: 24),
-            child: _LockdownButton(
-              onTap: () {
-                HapticFeedback.heavyImpact();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      "Shadow verrouillé pour $_formattedDuration",
-                      style: GoogleFonts.spaceMono(color: Colors.black, fontWeight: FontWeight.bold),
-                    ),
-                    backgroundColor: ShadowColors.primaryGreen,
-                  ),
-                );
-              },
-            ),
+                  backgroundColor: _homeBlue,
+                ),
+              );
+            },
           ),
         ],
       ),
     );
   }
 
+  Widget _buildCentralZone(double screenWidth) {
+    return LayoutBuilder(
+      builder: (context, constraints) => Transform.translate(
+        offset: const Offset(-26, 0),
+        child: OverflowBox(
+          alignment: Alignment.topLeft,
+          minWidth: screenWidth,
+          maxWidth: screenWidth,
+          minHeight: constraints.maxHeight,
+          maxHeight: constraints.maxHeight,
+          child: SizedBox(
+            width: screenWidth,
+            height: constraints.maxHeight,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned(
+                  left: 26,
+                  top: 0,
+                  bottom: 0,
+                  width: screenWidth * 0.5,
+                  child: _buildPresetGrid(),
+                ),
+                Positioned.fill(
+                    child: IgnorePointer(
+                      child: _FlatDurationWheel(
+                        selectedMinutes: _selectedMinutes,
+                        dragDistance: _wheelDragDistance,
+                      ),
+                  ),
+                ),
+                Positioned(
+                  left: screenWidth * 0.56,
+                  right: 0,
+                  top: 0,
+                  bottom: 0,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onVerticalDragStart: _handleWheelDragStart,
+                      onVerticalDragUpdate: _handleWheelDragUpdate,
+                      onVerticalDragEnd: _handleWheelDragEnd,
+                      onVerticalDragCancel: () {
+                        if (_wheelDragDistance != 0 || _wheelChangedDuringDrag) {
+                          setState(() {
+                            _wheelDragDistance = 0;
+                            _wheelChangedDuringDrag = false;
+                          });
+                        }
+                      },
+                    ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPresetGrid() {
+    return Column(
+      children: [
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(child: _presetTile(_presets[0])),
+              const SizedBox(width: 20),
+              Expanded(child: _presetTile(_presets[3])),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+        Expanded(
+          flex: 2,
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  children: [
+                    Expanded(child: _presetTile(_presets[1])),
+                    const SizedBox(height: 20),
+                    Expanded(child: _presetTile(_presets[2])),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 20),
+              Expanded(child: _presetTile(_presets[4])),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _presetTile(_Preset preset) {
     return _PresetDurationButton(
-      bigLabel: preset.bigLabel,
-      smallLabel: preset.smallLabel,
-      isSelected: _selectedMinutes == preset.minutes,
+      preset: preset,
+      selected: _selectedMinutes == preset.minutes,
       onTap: () => _selectMinutes(preset.minutes),
     );
   }
@@ -172,8 +283,6 @@ class _Preset {
   final String smallLabel;
 }
 
-// --- WIDGETS INTERNES ---
-
 class _TopTabBar extends StatelessWidget {
   const _TopTabBar({
     required this.currentTab,
@@ -186,50 +295,28 @@ class _TopTabBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      color: Colors.black.withOpacity(0.05),
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
+      width: double.infinity,
+      color: _homeHeaderBlue,
+      padding: const EdgeInsets.fromLTRB(16, 36, 16, 0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              _TabPill(
-                icon: Icons.timer_outlined,
-                isSelected: currentTab == LockdownTab.timer,
-                onTap: () => onTabSelected(LockdownTab.timer),
-              ),
-              const SizedBox(width: 12),
-              _TabPill(
-                icon: Icons.show_chart_rounded,
-                isSelected: currentTab == LockdownTab.stats,
-                onTap: () => onTabSelected(LockdownTab.stats),
-              ),
-              const SizedBox(width: 12),
-              _TabPill(
-                icon: Icons.settings_outlined,
-                isSelected: currentTab == LockdownTab.settings,
-                onTap: () => onTabSelected(LockdownTab.settings),
-              ),
-            ],
+          _TabItem(
+            icon: Icons.timer_outlined,
+            selected: currentTab == LockdownTab.timer,
+            onTap: () => onTabSelected(LockdownTab.timer),
           ),
-          const SizedBox(height: 14),
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: List.generate(5, (i) {
-              final filled = i < 4;
-              return Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: Container(
-                  width: 9,
-                  height: 9,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: filled ? Colors.black : Colors.transparent,
-                    border: filled ? null : Border.all(color: Colors.black, width: 1.5),
-                  ),
-                ),
-              );
-            }),
+          const SizedBox(width: 8),
+          _TabItem(
+            icon: Icons.show_chart_rounded,
+            selected: currentTab == LockdownTab.stats,
+            onTap: () => onTabSelected(LockdownTab.stats),
+          ),
+          const SizedBox(width: 8),
+          _TabItem(
+            icon: Icons.settings_rounded,
+            selected: currentTab == LockdownTab.settings,
+            onTap: () => onTabSelected(LockdownTab.settings),
           ),
         ],
       ),
@@ -237,87 +324,112 @@ class _TopTabBar extends StatelessWidget {
   }
 }
 
-class _TabPill extends StatelessWidget {
-  const _TabPill({
+class _TabItem extends StatelessWidget {
+  const _TabItem({
     required this.icon,
-    required this.isSelected,
+    required this.selected,
     required this.onTap,
   });
 
   final IconData icon;
-  final bool isSelected;
+  final bool selected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.lightImpact();
-        onTap();
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        width: 64,
-        height: 48,
-        decoration: BoxDecoration(
-          color: isSelected ? Colors.black : Colors.black.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Icon(
-          icon,
-          color: isSelected ? ShadowColors.primaryGreen : Colors.black,
-          size: 22,
+    final usableWidth = MediaQuery.sizeOf(context).width - 32;
+    return SizedBox(
+      width: usableWidth * (selected ? 0.385 : 0.275),
+      height: selected ? 90 : 76,
+      child: GestureDetector(
+        onTap: () {
+          HapticFeedback.lightImpact();
+          onTap();
+        },
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: _homeBlue,
+            borderRadius: selected
+                ? const BorderRadius.vertical(top: Radius.circular(34))
+                : BorderRadius.circular(38),
+          ),
+          child: Icon(icon, size: 34, color: Colors.black),
         ),
       ),
     );
   }
 }
 
+class _PageDots extends StatelessWidget {
+  const _PageDots();
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(5, (index) {
+        final filled = index < 4;
+        return Padding(
+          padding: const EdgeInsets.only(left: 5),
+          child: Container(
+            width: 13,
+            height: 13,
+            decoration: BoxDecoration(
+              color: filled ? Colors.black : Colors.transparent,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.black, width: 2),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+}
+
 class _PresetDurationButton extends StatelessWidget {
   const _PresetDurationButton({
-    required this.bigLabel,
-    required this.smallLabel,
-    required this.isSelected,
+    required this.preset,
+    required this.selected,
     required this.onTap,
   });
 
-  final String bigLabel;
-  final String smallLabel;
-  final bool isSelected;
+  final _Preset preset;
+  final bool selected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    final foreground = selected ? _homeBlue : Colors.black;
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         decoration: BoxDecoration(
-          color: isSelected ? Colors.black : Colors.transparent,
+          color: selected ? Colors.black : Colors.transparent,
           borderRadius: BorderRadius.circular(28),
           border: Border.all(color: Colors.black, width: 2.5),
         ),
         alignment: Alignment.center,
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              bigLabel,
+              preset.bigLabel,
               style: GoogleFonts.spaceMono(
-                fontSize: 30,
+                fontSize: 26,
                 fontWeight: FontWeight.w800,
-                height: 1.0,
-                color: isSelected ? ShadowColors.primaryGreen : Colors.black,
+                height: 1,
+                color: foreground,
               ),
             ),
-            const SizedBox(height: 2),
+            const SizedBox(height: 5),
             Text(
-              smallLabel,
+              preset.smallLabel,
               style: GoogleFonts.spaceMono(
-                fontSize: 13,
+                fontSize: 11,
                 fontWeight: FontWeight.w600,
-                color: isSelected ? ShadowColors.primaryGreen : Colors.black,
+                height: 1,
+                color: foreground,
               ),
             ),
           ],
@@ -327,136 +439,159 @@ class _PresetDurationButton extends StatelessWidget {
   }
 }
 
-class _DurationWheelPicker extends StatefulWidget {
-  const _DurationWheelPicker({
+/// Cadran plat décalé à droite de l'écran. Le sélecteur reste fixe et le
+/// calque contenant les valeurs tourne autour du centre du cadran.
+class _FlatDurationWheel extends StatelessWidget {
+  const _FlatDurationWheel({
     required this.selectedMinutes,
-    required this.onChanged,
-    this.stepMinutes = 15,
-    this.maxMinutes = 240,
+    required this.dragDistance,
   });
 
   final int selectedMinutes;
-  final ValueChanged<int> onChanged;
-  final int stepMinutes;
-  final int maxMinutes;
-
-  @override
-  State<_DurationWheelPicker> createState() => _DurationWheelPickerState();
-}
-
-class _DurationWheelPickerState extends State<_DurationWheelPicker> {
-  late final List<int> _values;
-  late FixedExtentScrollController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _values = [
-      for (int m = widget.stepMinutes; m <= widget.maxMinutes; m += widget.stepMinutes) m,
-    ];
-    _controller = FixedExtentScrollController(initialItem: _indexFor(widget.selectedMinutes));
-  }
-
-  @override
-  void didUpdateWidget(covariant _DurationWheelPicker oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    final targetIndex = _indexFor(widget.selectedMinutes);
-    if (targetIndex != _controller.selectedItem) {
-      _controller.animateToItem(
-        targetIndex,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOutCubic,
-      );
-    }
-  }
-
-  int _indexFor(int minutes) {
-    final clamped = minutes.clamp(widget.stepMinutes, widget.maxMinutes);
-    final index = (clamped / widget.stepMinutes).round() - 1;
-    return index.clamp(0, _values.length - 1);
-  }
-
-  String _format(int totalMinutes) {
-    final hours = totalMinutes ~/ 60;
-    final minutes = totalMinutes % 60;
-    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}';
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
+  final double dragDistance;
 
   @override
   Widget build(BuildContext context) {
-    return ListWheelScrollView.useDelegate(
-      controller: _controller,
-      itemExtent: 54,
-      diameterRatio: 1.15,
-      perspective: 0.006,
-      physics: const FixedExtentScrollPhysics(),
-      onSelectedItemChanged: (index) {
-        widget.onChanged(_values[index]);
-      },
-      childDelegate: ListWheelChildBuilderDelegate(
-        childCount: _values.length,
-        builder: (context, index) {
-          final minutes = _values[index];
-          final isSelected = minutes == widget.selectedMinutes;
-          return _WheelItem(
-            label: _format(minutes),
-            isSelected: isSelected,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final height = constraints.maxHeight;
+        final center = Offset(width * 1.126, height * 0.5);
+        final radius = width * 0.503;
+        final selectedIndex = selectedMinutes ~/ 15 - 1;
+        const stepAngle = 2 * math.pi / 16;
+        final selectedSlot = selectedIndex % 16;
+        // On conserve l'angle cumulé : le cadran tourne sans se recaler
+        // tous les 16 emplacements et ne donne donc jamais l'impression
+        // de changer de centre ou de diamètre.
+        // Une fraction du geste est conservée pour que le cadran suive
+        // immédiatement le doigt, dans le même sens que son déplacement.
+        final dragRotation = -dragDistance / 34.0 * stepAngle;
+        final dialRotation = selectedIndex * stepAngle + dragRotation;
+
+        final dialValues = <Widget>[];
+        for (var slot = 0; slot < 16; slot++) {
+          var relativeIndex = slot - selectedSlot;
+          if (relativeIndex > 8) relativeIndex -= 16;
+          if (relativeIndex < -8) relativeIndex += 16;
+          if (relativeIndex == 0) continue;
+
+          final minutes = selectedMinutes + relativeIndex * 15;
+          if (minutes < _LockdownTimerScreenState._minimumMinutes ||
+              minutes > _LockdownTimerScreenState._maximumMinutes) {
+            continue;
+          }
+
+          // Les valeurs suivantes sont sous le sélecteur et remontent vers
+          // lui lorsque le cadran tourne.
+          final angle = math.pi - slot * stepAngle;
+          final point = Offset(
+            center.dx + radius * math.cos(angle),
+            center.dy + radius * math.sin(angle),
           );
-        },
-      ),
+
+          dialValues.add(
+            Positioned(
+              left: point.dx + width * 0.045,
+              top: point.dy - 18,
+              width: width * 0.31,
+              height: 38,
+              child: Transform.rotate(
+                angle: angle - math.pi,
+                alignment: Alignment.centerLeft,
+                child: _ArcLabel(label: _formatDuration(minutes)),
+              ),
+            ),
+          );
+        }
+
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fill(
+              child: TweenAnimationBuilder<double>(
+                tween: Tween<double>(end: dialRotation),
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                child: SizedBox(
+                  width: width,
+                  height: height,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: dialValues,
+                  ),
+                ),
+                builder: (context, rotation, child) {
+                  return Transform.rotate(
+                    angle: rotation,
+                    alignment: Alignment.topLeft,
+                    origin: center,
+                    child: child,
+                  );
+                },
+              ),
+            ),
+            Positioned(
+              left: center.dx - radius,
+              top: center.dy - 45,
+              width: width - (center.dx - radius),
+              height: 90,
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(45),
+                    bottomLeft: Radius.circular(45),
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 20),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(width: 25, height: 4, color: _homeBlue),
+                      const SizedBox(width: 14),
+                      Text(
+                        _formatDuration(selectedMinutes),
+                        style: GoogleFonts.spaceMono(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: _homeBlue,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
 
-class _WheelItem extends StatelessWidget {
-  const _WheelItem({required this.label, required this.isSelected});
+class _ArcLabel extends StatelessWidget {
+  const _ArcLabel({required this.label});
 
   final String label;
-  final bool isSelected;
 
   @override
   Widget build(BuildContext context) {
-    final tickWidth = isSelected ? 22.0 : 14.0;
-
-    final content = Row(
+    return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Container(
-          width: tickWidth,
-          height: 2.5,
-          color: isSelected ? ShadowColors.primaryGreen : Colors.black,
-        ),
-        const SizedBox(width: 8),
+        Container(width: 28, height: 5, color: Colors.black),
+        const SizedBox(width: 12),
         Text(
           label,
           style: GoogleFonts.spaceMono(
-            fontSize: isSelected ? 20 : 15,
+            fontSize: 21,
             fontWeight: FontWeight.w700,
-            color: isSelected ? ShadowColors.primaryGreen : Colors.black,
+            color: Colors.black,
           ),
         ),
       ],
-    );
-
-    if (!isSelected) {
-      return Center(child: content);
-    }
-
-    return Center(
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-        decoration: BoxDecoration(
-          color: Colors.black,
-          borderRadius: BorderRadius.circular(30),
-        ),
-        child: content,
-      ),
     );
   }
 }
@@ -471,37 +606,30 @@ class _LockdownButton extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        height: 64,
+        height: 90,
         decoration: BoxDecoration(
           color: Colors.black,
-          borderRadius: BorderRadius.circular(32),
+          borderRadius: BorderRadius.circular(45),
         ),
         child: Row(
           children: [
-            const SizedBox(width: 6),
+            const SizedBox(width: 10),
             Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: ShadowColors.primaryGreen, width: 2),
-              ),
-              child: const Icon(
-                Icons.arrow_forward_rounded,
-                color: ShadowColors.primaryGreen,
-                size: 22,
-              ),
+              width: 70,
+              height: 70,
+              decoration: const BoxDecoration(color: _homeBlue, shape: BoxShape.circle),
+              child: const Icon(Icons.arrow_forward_rounded, color: Colors.black, size: 36),
             ),
             Expanded(
               child: Center(
                 child: Padding(
-                  padding: const EdgeInsets.only(right: 46),
+                  padding: const EdgeInsets.only(right: 70),
                   child: Text(
                     'LOCKDOWN',
                     style: GoogleFonts.spaceMono(
-                      color: ShadowColors.primaryGreen,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 20,
+                      color: _homeBlue,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w900,
                       letterSpacing: 1,
                     ),
                   ),
@@ -527,11 +655,19 @@ class _PlaceholderTab extends StatelessWidget {
       child: Text(
         label,
         style: GoogleFonts.spaceMono(
-          fontSize: 22,
-          fontWeight: FontWeight.w700,
+          fontSize: 24,
+          fontWeight: FontWeight.bold,
           color: Colors.black,
         ),
       ),
     );
   }
+}
+
+String _formatDuration(int totalMinutes) {
+  final hours = totalMinutes ~/ 60;
+  final minutes = totalMinutes % 60;
+  return hours.toString().padLeft(2, '0') +
+      ':' +
+      minutes.toString().padLeft(2, '0');
 }
