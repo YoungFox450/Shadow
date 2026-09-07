@@ -841,14 +841,20 @@ class _SwipeLockdownButtonState extends State<_SwipeLockdownButton>
                 Center(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 80),
-                    child: Text(
-                      'VERROUILLER',
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.spaceMono(
-                        color: _homeBlue,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1.5,
+                    child: Opacity(
+                      // L'opacité suit exactement la position du curseur :
+                      // le texte disparaît pendant le glissement et revient
+                      // à la même vitesse lorsque le curseur reprend sa place.
+                      opacity: (1 - _progress).clamp(0.0, 1.0),
+                      child: Text(
+                        'VERROUILLER',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.spaceMono(
+                          color: _homeBlue,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1.5,
+                        ),
                       ),
                     ),
                   ),
