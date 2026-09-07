@@ -3,9 +3,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shadow/core/theme.dart';
 
-const Color _homeBlue = Color(0xFF2498E8);
-const Color _homeHeaderBlue = Color(0xFF496594);
+// Palette partagée avec l'onboarding : vert menthe, noir et typographie mono.
+const Color _homeBlue = ShadowColors.primaryGreen;
+// Variante légèrement estompée du vert principal pour distinguer la navigation.
+const Color _homeHeaderBlue = Color(0xFF449184);
 
 enum LockdownTab { timer, stats, settings }
 
@@ -96,22 +99,35 @@ class _LockdownTimerScreenState extends State<LockdownTimerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _homeBlue,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          children: [
-            _TopTabBar(
-              currentTab: _currentTab,
-              onTabSelected: (tab) => setState(() => _currentTab = tab),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarColor: _homeHeaderBlue,
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
+      ),
+      child: Scaffold(
+        backgroundColor: _homeBlue,
+        body: ColoredBox(
+          color: _homeHeaderBlue,
+          child: SafeArea(
+            bottom: false,
+            child: Column(
+              children: [
+                _TopTabBar(
+                  currentTab: _currentTab,
+                  onTabSelected: (tab) => setState(() => _currentTab = tab),
+                ),
+                Expanded(
+                  child: ColoredBox(
+                    color: _homeBlue,
+                    child: _currentTab == LockdownTab.timer
+                        ? _buildTimerBody()
+                        : _PlaceholderTab(tab: _currentTab),
+                  ),
+                ),
+              ],
             ),
-            Expanded(
-              child: _currentTab == LockdownTab.timer
-                  ? _buildTimerBody()
-                  : _PlaceholderTab(tab: _currentTab),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -124,13 +140,6 @@ class _LockdownTimerScreenState extends State<LockdownTimerScreen> {
       padding: const EdgeInsets.fromLTRB(26, 0, 26, 36),
       child: Column(
         children: [
-          Transform.translate(
-            offset: const Offset(14, 8),
-            child: const Align(
-              alignment: Alignment.centerRight,
-              child: _PageDots(),
-            ),
-          ),
           SizedBox(height: screenWidth * 0.215),
           Text(
             _formattedDuration,
@@ -338,6 +347,7 @@ class _TabItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final usableWidth = MediaQuery.sizeOf(context).width - 32;
+    final tabColor = selected ? Colors.black : ShadowColors.statBoxBackground;
     return SizedBox(
       width: usableWidth * (selected ? 0.385 : 0.275),
       height: selected ? 90 : 76,
@@ -348,40 +358,21 @@ class _TabItem extends StatelessWidget {
         },
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: _homeBlue,
+            color: tabColor,
             borderRadius: selected
                 ? const BorderRadius.vertical(top: Radius.circular(34))
                 : BorderRadius.circular(38),
+            border: selected
+                ? null
+                : Border.all(color: Colors.black, width: 2),
           ),
-          child: Icon(icon, size: 34, color: Colors.black),
+          child: Icon(
+            icon,
+            size: 34,
+            color: selected ? _homeBlue : Colors.black,
+          ),
         ),
       ),
-    );
-  }
-}
-
-class _PageDots extends StatelessWidget {
-  const _PageDots();
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: List.generate(5, (index) {
-        final filled = index < 4;
-        return Padding(
-          padding: const EdgeInsets.only(left: 5),
-          child: Container(
-            width: 13,
-            height: 13,
-            decoration: BoxDecoration(
-              color: filled ? Colors.black : Colors.transparent,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.black, width: 2),
-            ),
-          ),
-        );
-      }),
     );
   }
 }
