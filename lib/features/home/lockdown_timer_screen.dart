@@ -1,17 +1,19 @@
+import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:shadow/core/theme.dart';
 
-// Palette partagée avec l'onboarding : vert menthe, noir et typographie mono.
+/// Palette de couleurs de Shadow.
 const Color _homeBlue = ShadowColors.primaryGreen;
-// Variante légèrement estompée du vert principal pour distinguer la navigation.
 const Color _homeHeaderBlue = Color(0xFF449184);
 
 enum LockdownTab { timer, stats, settings }
 
+/// Écran principal gérant le minuteur avec une logique mécanique d'odomètre et de roue crantée.
 class LockdownTimerScreen extends StatefulWidget {
   const LockdownTimerScreen({super.key});
 
@@ -19,82 +21,128 @@ class LockdownTimerScreen extends StatefulWidget {
   State<LockdownTimerScreen> createState() => _LockdownTimerScreenState();
 }
 
-class _LockdownTimerScreenState extends State<LockdownTimerScreen> {
+class _LockdownTimerScreenState extends State<LockdownTimerScreen>
+    with SingleTickerProviderStateMixin {
   static const _stepMinutes = 15;
   static const _minimumMinutes = 15;
-  static const _maximumMinutes = 24 * 60;
+  static const _maximumMinutes = 24 * 60; // 24 heures
 
+  /// Valeur cible (snap) pour le minuteur.
   int _selectedMinutes = 15;
+
+  /// Valeur visuelle continue pilotant les roues de l'odomètre et le cadran.
+  double _animatedMinutes = 15.0;
+
   LockdownTab _currentTab = LockdownTab.timer;
-  double _wheelDragDistance = 0;
-  bool _wheelChangedDuringDrag = false;
+
+  /// Contrôleur gérant les transitions fluides.
+  late final AnimationController _animController;
+  Animation<double>? _minutesAnimation;
+
+  /// Gestion du glissement (drag).
+  double _dragStartY = 0;
+  double _dragStartMinutes = 0;
+  bool _isDragging = false;
 
   static const List<_Preset> _presets = [
     _Preset(minutes: 15, bigLabel: '15', smallLabel: 'minutes'),
     _Preset(minutes: 30, bigLabel: '30', smallLabel: 'minutes'),
-    _Preset(minutes: 60, bigLabel: '1', smallLabel: 'hour'),
-    _Preset(minutes: 90, bigLabel: '1:30', smallLabel: 'hours'),
-    _Preset(minutes: 120, bigLabel: '2', smallLabel: 'hours'),
+    _Preset(minutes: 60, bigLabel: '1', smallLabel: 'heure'),
+    _Preset(minutes: 90, bigLabel: '1:30', smallLabel: 'heures'),
+    _Preset(minutes: 120, bigLabel: '2', smallLabel: 'heures'),
   ];
 
-  String get _formattedDuration => _formatDuration(_selectedMinutes);
+  @override
+  void initState() {
+    super.initState();
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    )..addListener(() {
+        if (_minutesAnimation != null) {
+          setState(() => _animatedMinutes = _minutesAnimation!.value);
+        }
+      });
+  }
 
-  void _selectMinutes(int minutes, {bool preserveDrag = false}) {
-    if (minutes == _selectedMinutes) return;
+  @override
+  void dispose() {
+    _animController.dispose();
+    super.dispose();
+  }
+
+  /// Anime la durée vers une cible (transition "Preset" ou "Snap").
+  void _animateToMinutes(int targetMinutes, {bool fast = false}) {
+    if (targetMinutes == _selectedMinutes && !_isDragging && _animController.isAnimating) return;
+
     HapticFeedback.selectionClick();
+    _selectedMinutes = targetMinutes;
+
+    final distance = (_animatedMinutes - targetMinutes).abs();
+    final duration = fast
+        ? (220 + distance * 4).clamp(260, 700).toInt()
+        : (300 + distance * 8).clamp(320, 850).toInt();
+    _animController.duration = Duration(milliseconds: duration);
+
+    _minutesAnimation = Tween<double>(
+      begin: _animatedMinutes,
+      end: targetMinutes.toDouble(),
+    ).animate(CurvedAnimation(
+      parent: _animController,
+      curve: Curves.easeOutCubic,
+    ));
+
+    _animController.forward(from: 0);
+  }
+
+  /// Début du glissement. Zone de détection élargie pour plus de confort.
+  void _handleDragStart(DragStartDetails details) {
+    _animController.stop();
     setState(() {
-      _selectedMinutes = minutes;
-      if (!preserveDrag) _wheelDragDistance = 0;
+      _isDragging = true;
+      _dragStartY = details.globalPosition.dy;
+      _dragStartMinutes = _animatedMinutes;
     });
   }
 
-  void _handleWheelDragStart(DragStartDetails _) {
-    _wheelDragDistance = 0;
-    _wheelChangedDuringDrag = false;
-  }
+  /// Mise à jour du glissement : l'odomètre suit le doigt au pixel près.
+  void _handleDragUpdate(DragUpdateDetails details) {
+    final deltaY = details.globalPosition.dy - _dragStartY;
+    // Ratio : 1 min de temps pour 2.8 pixels de glissement vertical.
+    final deltaMinutes = -deltaY / 2.8;
 
-  void _handleWheelDragUpdate(DragUpdateDetails details) {
-    _wheelDragDistance += details.delta.dy;
-    const threshold = 34.0;
-    while (_wheelDragDistance.abs() >= threshold) {
-      // Le geste suit l'écran : vers le haut, on avance dans les durées.
-      final direction = _wheelDragDistance < 0 ? 1 : -1;
-      final next = (_selectedMinutes + direction * _stepMinutes)
-          .clamp(_minimumMinutes, _maximumMinutes)
-          .toInt();
-      if (next == _selectedMinutes) {
-        _wheelDragDistance = 0;
-        break;
+    double newValue = (_dragStartMinutes + deltaMinutes)
+        .clamp(_minimumMinutes.toDouble(), _maximumMinutes.toDouble());
+
+    if (newValue != _animatedMinutes) {
+      setState(() {
+        _animatedMinutes = newValue;
+        _selectedMinutes = ((newValue / _stepMinutes).round() * _stepMinutes).toInt();
+      });
+
+      // Feedback haptique discret aux paliers.
+      if ((_animatedMinutes % _stepMinutes).abs() < 0.2) {
+        // HapticFeedback.lightImpact();
       }
-      _selectMinutes(next, preserveDrag: true);
-      _wheelChangedDuringDrag = true;
-      _wheelDragDistance += _wheelDragDistance < 0 ? threshold : -threshold;
     }
-
-    // Repeint aussi pendant le déplacement, même avant le prochain pas de
-    // 15 minutes, afin que le cadran colle réellement au geste.
-    if (mounted) setState(() {});
   }
 
-  void _handleWheelDragEnd(DragEndDetails _) {
-    if (_wheelDragDistance == 0) {
-      _wheelChangedDuringDrag = false;
-      return;
-    }
+  /// Fin du glissement : recalage automatique.
+  void _handleDragEnd(DragEndDetails details) {
+    setState(() => _isDragging = false);
 
-    final next = _wheelChangedDuringDrag
-        ? _selectedMinutes
-        : (_selectedMinutes + (_wheelDragDistance < 0 ? 1 : -1) * _stepMinutes)
-            .clamp(_minimumMinutes, _maximumMinutes)
-            .toInt();
-    _wheelDragDistance = 0;
-    _wheelChangedDuringDrag = false;
+    final velocityY = details.velocity.pixelsPerSecond.dy;
+    final hasFling = velocityY.abs() > 500;
+    final momentum = hasFling
+        ? (-velocityY * 0.10).clamp(-360.0, 360.0)
+        : 0.0;
+    final target = ((_animatedMinutes + momentum) / _stepMinutes).round() *
+        _stepMinutes;
+    final clampedTarget = target
+        .clamp(_minimumMinutes, _maximumMinutes)
+        .toInt();
 
-    if (next != _selectedMinutes) {
-      _selectMinutes(next, preserveDrag: true);
-    } else if (mounted) {
-      setState(() {});
-    }
+    _animateToMinutes(clampedTarget, fast: hasFling);
   }
 
   @override
@@ -135,14 +183,15 @@ class _LockdownTimerScreenState extends State<LockdownTimerScreen> {
 
   Widget _buildTimerBody() {
     final screenWidth = MediaQuery.sizeOf(context).width;
-    final timerSize = (screenWidth * 0.255).clamp(78.0, 128.0).toDouble();
+    final timerSize = (screenWidth * 0.235).clamp(70.0, 115.0).toDouble();
     return Padding(
       padding: const EdgeInsets.fromLTRB(26, 0, 26, 36),
       child: Column(
         children: [
-          SizedBox(height: screenWidth * 0.215),
-          Text(
-            _formattedDuration,
+          SizedBox(height: screenWidth * 0.20),
+          // Odomètre mécanique à 4 roues crantées.
+          _OdometerDurationDisplay(
+            minutes: _animatedMinutes,
             style: GoogleFonts.spaceMono(
               fontSize: timerSize,
               fontWeight: FontWeight.w900,
@@ -155,19 +204,15 @@ class _LockdownTimerScreenState extends State<LockdownTimerScreen> {
           Expanded(child: _buildCentralZone(screenWidth)),
           const SizedBox(height: 26),
           _LockdownButton(
-            onTap: () {
+            onCompleted: () {
               HapticFeedback.heavyImpact();
-              ScaffoldMessenger.of(context).hideCurrentSnackBar();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(
-                    'Shadow verrouillé pour $_formattedDuration',
-                    style: GoogleFonts.spaceMono(
-                      color: Colors.black,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  backgroundColor: _homeBlue,
+              Navigator.of(context).push(
+                PageRouteBuilder<void>(
+                  transitionDuration: const Duration(milliseconds: 260),
+                  pageBuilder: (context, animation, secondaryAnimation) =>
+                      _LockdownActiveScreen(duration: Duration(minutes: _selectedMinutes)),
+                  transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+                      FadeTransition(opacity: animation, child: child),
                 ),
               );
             },
@@ -187,49 +232,45 @@ class _LockdownTimerScreenState extends State<LockdownTimerScreen> {
           maxWidth: screenWidth,
           minHeight: constraints.maxHeight,
           maxHeight: constraints.maxHeight,
-          child: SizedBox(
-            width: screenWidth,
-            height: constraints.maxHeight,
-            child: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Positioned(
-                  left: 26,
-                  top: 0,
-                  bottom: 0,
-                  width: screenWidth * 0.5,
-                  child: _buildPresetGrid(),
-                ),
-                Positioned.fill(
-                    child: IgnorePointer(
-                      child: _FlatDurationWheel(
-                        selectedMinutes: _selectedMinutes,
-                        dragDistance: _wheelDragDistance,
-                      ),
+          child: Stack(
+            children: [
+              // Grille des presets à gauche.
+              Positioned(
+                left: 26,
+                top: 0,
+                bottom: 0,
+                width: screenWidth * 0.5,
+                child: _buildPresetGrid(),
+              ),
+              // Cadran rotatif visuel.
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: _FlatDurationWheel(
+                    displayMinutes: _animatedMinutes,
                   ),
                 ),
-                Positioned(
-                  left: screenWidth * 0.56,
-                  right: 0,
-                  top: 0,
-                  bottom: 0,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onVerticalDragStart: _handleWheelDragStart,
-                      onVerticalDragUpdate: _handleWheelDragUpdate,
-                      onVerticalDragEnd: _handleWheelDragEnd,
-                      onVerticalDragCancel: () {
-                        if (_wheelDragDistance != 0 || _wheelChangedDuringDrag) {
-                          setState(() {
-                            _wheelDragDistance = 0;
-                            _wheelChangedDuringDrag = false;
-                          });
-                        }
-                      },
-                    ),
+              ),
+              // Zone de détection du geste couvrant toute la moitié droite et le centre.
+              Positioned(
+                left: screenWidth * 0.58,
+                right: 0,
+                top: 0,
+                bottom: 0,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  dragStartBehavior: DragStartBehavior.down,
+                  onPanStart: _handleDragStart,
+                  onPanUpdate: _handleDragUpdate,
+                  onPanEnd: _handleDragEnd,
+                  onPanCancel: () {
+                    if (_isDragging) {
+                      setState(() => _isDragging = false);
+                      _animateToMinutes(_selectedMinutes);
+                    }
+                  },
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
@@ -275,7 +316,7 @@ class _LockdownTimerScreenState extends State<LockdownTimerScreen> {
     return _PresetDurationButton(
       preset: preset,
       selected: _selectedMinutes == preset.minutes,
-      onTap: () => _selectMinutes(preset.minutes),
+      onTap: () => _animateToMinutes(preset.minutes),
     );
   }
 }
@@ -292,6 +333,151 @@ class _Preset {
   final String smallLabel;
 }
 
+/// Affichage odomètre mécanique avec cascade de mouvements (Carry-over).
+class _OdometerDurationDisplay extends StatelessWidget {
+  const _OdometerDurationDisplay({
+    required this.minutes,
+    required this.style,
+  });
+
+  final double minutes;
+  final TextStyle style;
+
+  /// Réalise le mouvement mécanique : une roue ne tourne que pour le carry-over
+  /// de la roue de rang inférieur (transition 9->0 ou 5->0).
+  double mechanicalStep(double value, double range) {
+    final floor = (value / range).floor();
+    final fract = (value / range) - floor;
+    // La roue suivante ne tourne que sur les derniers 10% du tour actuel.
+    if (fract < 0.9) return floor.toDouble();
+    return floor + (fract - 0.9) * 10.0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Calcul des steps continus pour chaque roue :
+    final m2Steps = minutes; // M2 tourne tout le temps
+    final m1Steps = mechanicalStep(minutes, 10.0); // M1 attend 10 unités de M2
+    final h2Steps = mechanicalStep(minutes, 60.0); // H2 attend 60 unités (1h)
+    final h1Steps = mechanicalStep(minutes, 600.0); // H1 attend 600 unités (10h)
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        _OdometerDigitWheel(
+          key: const ValueKey('h1-digit'),
+          stepIndex: h1Steps,
+          modulo: 10,
+          style: style,
+        ),
+        _OdometerDigitWheel(
+          key: const ValueKey('h2-digit'),
+          stepIndex: h2Steps,
+          modulo: 10,
+          style: style,
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2.0),
+          child: Text(':', style: style),
+        ),
+        _OdometerDigitWheel(
+          key: const ValueKey('m1-digit'),
+          stepIndex: m1Steps,
+          modulo: 6,
+          style: style,
+        ),
+        _OdometerDigitWheel(
+          key: const ValueKey('m2-digit'),
+          stepIndex: m2Steps,
+          modulo: 10,
+          style: style,
+        ),
+      ],
+    );
+  }
+}
+
+/// Une roue dentée de l'odomètre pilotée directement par l'offset.
+class _OdometerDigitWheel extends StatefulWidget {
+  const _OdometerDigitWheel({
+    super.key,
+    required this.stepIndex,
+    required this.modulo,
+    required this.style,
+  });
+
+  final double stepIndex;
+  final int modulo;
+  final TextStyle style;
+
+  @override
+  State<_OdometerDigitWheel> createState() => _OdometerDigitWheelState();
+}
+
+class _OdometerDigitWheelState extends State<_OdometerDigitWheel> {
+  static const _baseOffset = 10000;
+  late final FixedExtentScrollController _controller;
+
+  int get _alignedBaseOffset =>
+      _baseOffset - (_baseOffset % widget.modulo);
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = FixedExtentScrollController(
+      initialItem: _alignedBaseOffset + widget.stepIndex.toInt(),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _OdometerDigitWheel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_controller.hasClients) {
+      final fontSize = widget.style.fontSize ?? 80;
+      final itemExtent = fontSize * 1.05;
+      _controller.jumpTo(
+        (_alignedBaseOffset + widget.stepIndex) * itemExtent,
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fontSize = widget.style.fontSize ?? 80;
+    final itemExtent = fontSize * 1.05;
+    final digitWidth = fontSize * 0.62;
+
+    return SizedBox(
+      width: digitWidth,
+      height: itemExtent,
+      child: ListWheelScrollView.useDelegate(
+        controller: _controller,
+        itemExtent: itemExtent,
+        physics: const NeverScrollableScrollPhysics(),
+        diameterRatio: 1.8,
+        perspective: 0.005,
+        squeeze: 1.0,
+        childDelegate: ListWheelChildLoopingListDelegate(
+          children: List.generate(
+            widget.modulo,
+            (digit) => Center(
+              child: Text('$digit', style: widget.style, maxLines: 1),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Barre d'onglets supérieure.
 class _TopTabBar extends StatelessWidget {
   const _TopTabBar({
     required this.currentTab,
@@ -347,7 +533,7 @@ class _TabItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final usableWidth = MediaQuery.sizeOf(context).width - 32;
-    final tabColor = selected ? Colors.black : ShadowColors.statBoxBackground;
+    final tabColor = selected ? _homeBlue : ShadowColors.statBoxBackground;
     return SizedBox(
       width: usableWidth * (selected ? 0.385 : 0.275),
       height: selected ? 90 : 76,
@@ -362,15 +548,9 @@ class _TabItem extends StatelessWidget {
             borderRadius: selected
                 ? const BorderRadius.vertical(top: Radius.circular(34))
                 : BorderRadius.circular(38),
-            border: selected
-                ? null
-                : Border.all(color: Colors.black, width: 2),
+            border: selected ? null : Border.all(color: Colors.black, width: 2),
           ),
-          child: Icon(
-            icon,
-            size: 34,
-            color: selected ? _homeBlue : Colors.black,
-          ),
+          child: Icon(icon, size: 34, color: Colors.black),
         ),
       ),
     );
@@ -430,16 +610,13 @@ class _PresetDurationButton extends StatelessWidget {
   }
 }
 
-/// Cadran plat décalé à droite de l'écran. Le sélecteur reste fixe et le
-/// calque contenant les valeurs tourne autour du centre du cadran.
+/// Cadran rotatif dont la rotation est synchronisée sur displayMinutes.
 class _FlatDurationWheel extends StatelessWidget {
   const _FlatDurationWheel({
-    required this.selectedMinutes,
-    required this.dragDistance,
+    required this.displayMinutes,
   });
 
-  final int selectedMinutes;
-  final double dragDistance;
+  final double displayMinutes;
 
   @override
   Widget build(BuildContext context) {
@@ -449,33 +626,32 @@ class _FlatDurationWheel extends StatelessWidget {
         final height = constraints.maxHeight;
         final center = Offset(width * 1.126, height * 0.5);
         final radius = width * 0.503;
-        final selectedIndex = selectedMinutes ~/ 15 - 1;
         const stepAngle = 2 * math.pi / 16;
-        final selectedSlot = selectedIndex % 16;
-        // On conserve l'angle cumulé : le cadran tourne sans se recaler
-        // tous les 16 emplacements et ne donne donc jamais l'impression
-        // de changer de centre ou de diamètre.
-        // Une fraction du geste est conservée pour que le cadran suive
-        // immédiatement le doigt, dans le même sens que son déplacement.
-        final dragRotation = -dragDistance / 34.0 * stepAngle;
-        final dialRotation = selectedIndex * stepAngle + dragRotation;
+
+        // La position du cadran reste continue pendant toute l'animation.
+        // Il ne faut pas faire tourner un sous-ensemble de repères puis
+        // remettre sa rotation à zéro à chaque nouveau créneau : ce reset
+        // est perceptible pendant les transitions animées.
+        final clampedMinutes = displayMinutes
+            .clamp(15.0, 1440.0)
+            .toDouble();
+        final slotPosition = clampedMinutes / 15.0;
+        final centerSlot = slotPosition.round().clamp(1, 96).toInt();
+        final visibleMinutes = ((clampedMinutes / 15).round() * 15)
+            .clamp(15, 1440)
+            .toInt();
 
         final dialValues = <Widget>[];
-        for (var slot = 0; slot < 16; slot++) {
-          var relativeIndex = slot - selectedSlot;
-          if (relativeIndex > 8) relativeIndex -= 16;
-          if (relativeIndex < -8) relativeIndex += 16;
-          if (relativeIndex == 0) continue;
+        // Fenêtre de labels autour du curseur. Chaque label est positionné
+        // directement avec la position continue du doigt/ressort.
+        for (var i = -8; i <= 8; i++) {
+          final slotIndex = centerSlot + i;
+          if (slotIndex == centerSlot) continue;
+          final minutes = slotIndex * 15;
+          if (minutes < 15 || minutes > 1440) continue;
 
-          final minutes = selectedMinutes + relativeIndex * 15;
-          if (minutes < _LockdownTimerScreenState._minimumMinutes ||
-              minutes > _LockdownTimerScreenState._maximumMinutes) {
-            continue;
-          }
-
-          // Les valeurs suivantes sont sous le sélecteur et remontent vers
-          // lui lorsque le cadran tourne.
-          final angle = math.pi - slot * stepAngle;
+          final offset = slotIndex - slotPosition;
+          final angle = math.pi - offset * stepAngle;
           final point = Offset(
             center.dx + radius * math.cos(angle),
             center.dy + radius * math.sin(angle),
@@ -500,57 +676,41 @@ class _FlatDurationWheel extends StatelessWidget {
           clipBehavior: Clip.none,
           children: [
             Positioned.fill(
-              child: TweenAnimationBuilder<double>(
-                tween: Tween<double>(end: dialRotation),
-                duration: const Duration(milliseconds: 220),
-                curve: Curves.easeOutCubic,
-                child: SizedBox(
-                  width: width,
-                  height: height,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: dialValues,
-                  ),
-                ),
-                builder: (context, rotation, child) {
-                  return Transform.rotate(
-                    angle: rotation,
-                    alignment: Alignment.topLeft,
-                    origin: center,
-                    child: child,
-                  );
-                },
-              ),
+              child: Stack(clipBehavior: Clip.none, children: dialValues),
             ),
+            // Sélecteur central (pilule noire).
             Positioned(
               left: center.dx - radius,
-              top: center.dy - 45,
+              top: center.dy - 36,
               width: width - (center.dx - radius),
-              height: 90,
+              height: 72,
               child: DecoratedBox(
                 decoration: const BoxDecoration(
                   color: Colors.black,
                   borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(45),
-                    bottomLeft: Radius.circular(45),
+                    topLeft: Radius.circular(36),
+                    bottomLeft: Radius.circular(36),
                   ),
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 20),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(width: 25, height: 4, color: _homeBlue),
-                      const SizedBox(width: 14),
-                      Text(
-                        _formatDuration(selectedMinutes),
-                        style: GoogleFonts.spaceMono(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: _homeBlue,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 18),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(width: 25, height: 4, color: _homeBlue),
+                        const SizedBox(width: 14),
+                        Text(
+                          _formatDuration(visibleMinutes),
+                          style: GoogleFonts.spaceMono(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: _homeBlue,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -588,46 +748,222 @@ class _ArcLabel extends StatelessWidget {
 }
 
 class _LockdownButton extends StatelessWidget {
-  const _LockdownButton({required this.onTap});
+  const _LockdownButton({required this.onCompleted});
 
-  final VoidCallback onTap;
+  final VoidCallback onCompleted;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 90,
-        decoration: BoxDecoration(
-          color: Colors.black,
-          borderRadius: BorderRadius.circular(45),
-        ),
-        child: Row(
-          children: [
-            const SizedBox(width: 10),
-            Container(
-              width: 70,
-              height: 70,
-              decoration: const BoxDecoration(color: _homeBlue, shape: BoxShape.circle),
-              child: const Icon(Icons.arrow_forward_rounded, color: Colors.black, size: 36),
+    return _SwipeLockdownButton(onCompleted: onCompleted);
+  }
+}
+
+class _SwipeLockdownButton extends StatefulWidget {
+  const _SwipeLockdownButton({required this.onCompleted});
+
+  final VoidCallback onCompleted;
+
+  @override
+  State<_SwipeLockdownButton> createState() => _SwipeLockdownButtonState();
+}
+
+class _SwipeLockdownButtonState extends State<_SwipeLockdownButton>
+    with SingleTickerProviderStateMixin {
+  static const _thumbSize = 70.0;
+  static const _horizontalPadding = 10.0;
+  double _progress = 0;
+  late final AnimationController _snapController;
+  late Animation<double> _snapAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _snapController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    )..addListener(() => setState(() => _progress = _snapAnimation.value));
+  }
+
+  @override
+  void dispose() {
+    _snapController.dispose();
+    super.dispose();
+  }
+
+  void _updateProgress(DragUpdateDetails details, double trackWidth) {
+    final travel = trackWidth - _thumbSize - (_horizontalPadding * 2);
+    if (travel <= 0) return;
+    _snapController.stop();
+    setState(() {
+      _progress = (_progress + details.delta.dx / travel).clamp(0.0, 1.0).toDouble();
+    });
+  }
+
+  void _finishDrag() {
+    if (_progress >= 0.96) {
+      setState(() => _progress = 1);
+      HapticFeedback.mediumImpact();
+      _snapTo(0);
+      widget.onCompleted();
+    } else {
+      _snapTo(0);
+    }
+  }
+
+  void _snapTo(double value) {
+    _snapController.stop();
+    _snapAnimation = Tween<double>(begin: _progress, end: value).animate(
+      CurvedAnimation(parent: _snapController, curve: Curves.easeOutCubic),
+    );
+    _snapController.forward(from: 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final travel = constraints.maxWidth - _thumbSize - (_horizontalPadding * 2);
+        final left = _horizontalPadding + travel * _progress;
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onHorizontalDragUpdate: (details) => _updateProgress(details, constraints.maxWidth),
+          onHorizontalDragEnd: (_) => _finishDrag(),
+          onHorizontalDragCancel: () => _snapTo(0),
+          child: Container(
+            height: 90,
+            decoration: BoxDecoration(
+              color: Colors.black,
+              borderRadius: BorderRadius.circular(45),
             ),
-            Expanded(
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 70),
-                  child: Text(
-                    'LOCKDOWN',
-                    style: GoogleFonts.spaceMono(
-                      color: _homeBlue,
-                      fontSize: 24,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 80),
+                    child: Text(
+                      'VERROUILLER',
+                      textAlign: TextAlign.center,
+                      style: GoogleFonts.spaceMono(
+                        color: _homeBlue,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1.5,
+                      ),
                     ),
                   ),
                 ),
-              ),
+                Positioned(
+                  left: left,
+                  top: _horizontalPadding,
+                  child: Container(
+                    width: _thumbSize,
+                    height: _thumbSize,
+                    decoration: const BoxDecoration(
+                      color: _homeBlue,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Transform.rotate(
+                      angle: -math.pi * _progress,
+                      child: const Icon(
+                        Icons.arrow_forward_rounded,
+                        color: Colors.black,
+                        size: 36,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _LockdownActiveScreen extends StatefulWidget {
+  const _LockdownActiveScreen({required this.duration});
+
+  final Duration duration;
+
+  @override
+  State<_LockdownActiveScreen> createState() => _LockdownActiveScreenState();
+}
+
+class _LockdownActiveScreenState extends State<_LockdownActiveScreen> {
+  late Duration _remaining;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _remaining = widget.duration;
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_remaining <= Duration.zero) {
+        _timer?.cancel();
+        return;
+      }
+      setState(() => _remaining -= const Duration(seconds: 1));
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarColor: Colors.black,
+        systemNavigationBarColor: Colors.black,
+        statusBarIconBrightness: Brightness.dark,
+        systemNavigationBarIconBrightness: Brightness.dark,
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'VERROUILLAGE ACTIF',
+                  style: GoogleFonts.spaceMono(
+                    color: _homeBlue,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 2,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  '${_remaining.inHours.toString().padLeft(2, '0')}:${(_remaining.inMinutes % 60).toString().padLeft(2, '0')}:${(_remaining.inSeconds % 60).toString().padLeft(2, '0')}',
+                  style: GoogleFonts.spaceMono(
+                    color: _homeBlue,
+                    fontSize: 48,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -2,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'MODE FOCUS',
+                  style: GoogleFonts.spaceMono(
+                    color: Colors.white54,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.5,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -655,10 +991,9 @@ class _PlaceholderTab extends StatelessWidget {
   }
 }
 
-String _formatDuration(int totalMinutes) {
-  final hours = totalMinutes ~/ 60;
-  final minutes = totalMinutes % 60;
-  return hours.toString().padLeft(2, '0') +
-      ':' +
-      minutes.toString().padLeft(2, '0');
+String _formatDuration(num totalMinutes) {
+  final int minutesInt = totalMinutes.toInt();
+  final hours = minutesInt ~/ 60;
+  final minutes = minutesInt % 60;
+  return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}';
 }

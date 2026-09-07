@@ -5,7 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:shadow/core/theme.dart';
 import 'package:shadow/native/permissions_bridge.dart';
 
-/// Modèle de données pour les étapes de l'onboarding
+/// Modèle de données pour les étapes de l'onboarding.
 class _StepData {
   final String title;
   final String body;
@@ -18,7 +18,7 @@ class _StepData {
   });
 }
 
-/// Contenu des étapes
+/// Contenu textuel des étapes d'introduction en français.
 const List<_StepData> _steps = [
   _StepData(
     title: 'Pas de mode\néchappatoire.',
@@ -36,12 +36,13 @@ const List<_StepData> _steps = [
     buttonLabel: 'Permission',
   ),
   _StepData(
-    title: 'Prêts à\nverrouiller ?',
+    title: 'Prêt à\nverrouiller ?',
     body: 'Rejoins tous ceux qui ont déjà bloqué...',
-    buttonLabel: 'Continue',
+    buttonLabel: 'Continuer',
   ),
 ];
 
+/// Écran d'onboarding gérant le flux d'introduction et les permissions.
 class OnboardingScreen extends StatefulWidget {
   final VoidCallback? onFinished;
 
@@ -61,6 +62,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     super.dispose();
   }
 
+  /// Passe à l'étape suivante avec un retour haptique.
   void _goToNext() {
     HapticFeedback.lightImpact();
     if (_currentIndex < 6) {
@@ -81,29 +83,30 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Indicateur de progression (points en haut).
             _buildStaticProgressIndicator(),
             Expanded(
               child: PageView(
                 controller: _pageController,
-                physics: const NeverScrollableScrollPhysics(),
+                physics: const NeverScrollableScrollPhysics(), // Navigation forcée par boutons.
                 onPageChanged: (index) => setState(() => _currentIndex = index),
                 children: [
-                  _StepPage(step: _steps[0], onNext: _goToNext), // 0
-                  _StepPage(step: _steps[1], onNext: _goToNext), // 1
-                  _StepPage(step: _steps[2], onNext: _goToNext), // 2
+                  _StepPage(step: _steps[0], onNext: _goToNext), // Accueil
+                  _StepPage(step: _steps[1], onNext: _goToNext), // Intro permissions
+                  _StepPage(step: _steps[2], onNext: _goToNext), // Détails permissions
                   _LoadingPage(
                     key: const ValueKey('loading-before-permissions'),
                     onReady: _goToNext,
-                  ), // 3
-                  _PermissionsPage(onContinue: _goToNext), // 4
+                  ), // Chargement 1
+                  _PermissionsPage(onContinue: _goToNext), // Écran interactif des permissions
                   _LoadingPage(
                     key: const ValueKey('loading-after-permissions'),
                     onReady: _goToNext,
                     delay: const Duration(milliseconds: 1400),
                     title: 'Configuration du\nverrouillage en cours',
                     subtitle: 'On vérifie que tout est bien activé avant de te laisser entrer.',
-                  ), // 5
-                  _FinalPage(step: _steps[3], onNext: _goToNext), // 6
+                  ), // Chargement 2
+                  _FinalPage(step: _steps[3], onNext: _goToNext), // Écran final / Stats
                 ],
               ),
             ),
@@ -113,7 +116,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
+  /// Gère la visibilité et l'index actif de l'indicateur de progression.
   Widget _buildStaticProgressIndicator() {
+    // Cache l'indicateur pendant les phases techniques (chargement/permissions).
     bool isVisible = _currentIndex < 3 || _currentIndex == 6;
     int activeDot = _currentIndex >= 6 ? 3 : _currentIndex;
 
@@ -128,7 +133,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 }
 
-/// Widget des points de progression
+/// Dessine les points de progression avec animation de largeur.
 class _StepDots extends StatelessWidget {
   final int total;
   final int activeIndex;
@@ -156,7 +161,7 @@ class _StepDots extends StatelessWidget {
   }
 }
 
-/// Bouton pilule noir
+/// Bouton pilule noir standard de l'application.
 class _PillButton extends StatelessWidget {
   final String label;
   final VoidCallback onPressed;
@@ -197,7 +202,7 @@ class _PillButton extends StatelessWidget {
   }
 }
 
-/// Layout pour les étapes textuelles
+/// Layout pour une étape d'introduction (titre + corps + bouton).
 class _StepPage extends StatelessWidget {
   final _StepData step;
   final VoidCallback onNext;
@@ -238,7 +243,7 @@ class _StepPage extends StatelessWidget {
   }
 }
 
-/// Page de chargement
+/// Écran de chargement avec délai simulé pour la fluidité.
 class _LoadingPage extends StatefulWidget {
   final VoidCallback onReady;
   final Duration delay;
@@ -308,6 +313,7 @@ class _LoadingPageState extends State<_LoadingPage> {
   }
 }
 
+/// Modèle pour une permission Android.
 class _PermissionItem {
   final IconData icon;
   final String title;
@@ -338,7 +344,7 @@ const List<_PermissionItem> _permissionItems = [
   ),
 ];
 
-/// Page de permissions connectée au natif avec observer de cycle de vie
+/// Écran des permissions avec vérification en temps réel du statut Android.
 class _PermissionsPage extends StatefulWidget {
   final VoidCallback onContinue;
 
@@ -370,11 +376,13 @@ class _PermissionsPageState extends State<_PermissionsPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Rafraîchit les statuts quand l'utilisateur revient de l'écran des réglages Android.
     if (state == AppLifecycleState.resumed) {
       _refreshStatuses();
     }
   }
 
+  /// Appelle le pont natif pour vérifier l'état actuel des permissions.
   Future<void> _refreshStatuses() async {
     final results = await Future.wait([
       PermissionsBridge.isUsageAccessGranted(),
@@ -390,6 +398,7 @@ class _PermissionsPageState extends State<_PermissionsPage>
     });
   }
 
+  /// Ouvre l'écran des réglages Android correspondant à la permission.
   Future<void> _requestPermission(int index) async {
     switch (index) {
       case 0:
@@ -460,7 +469,7 @@ class _PermissionsPageState extends State<_PermissionsPage>
   }
 }
 
-/// Carte de permission avec bouton / badge
+/// Carte interactive affichant le statut d'une permission.
 class _PermissionCard extends StatelessWidget {
   final _PermissionItem item;
   final bool granted;
@@ -561,7 +570,7 @@ class _PermissionCard extends StatelessWidget {
   }
 }
 
-/// Boîte de statistiques
+/// Carte affichant une statistique rapide.
 class _StatBox extends StatelessWidget {
   final String value;
   final String label;
@@ -604,7 +613,7 @@ class _StatBox extends StatelessWidget {
   }
 }
 
-/// Page finale
+/// Écran final de l'onboarding affichant des statistiques et le bouton d'entrée.
 class _FinalPage extends StatelessWidget {
   final _StepData step;
   final VoidCallback onNext;
@@ -645,7 +654,7 @@ class _FinalPage extends StatelessWidget {
                 Expanded(
                   child: _StatBox(
                     value: '00 000+',
-                    label: 'ceux qui approuvent\nlockdown',
+                    label: 'approuvent\nlockdown',
                   ),
                 ),
                 SizedBox(width: 12),
@@ -680,7 +689,7 @@ class _FinalPage extends StatelessWidget {
                     ),
                     recognizer: TapGestureRecognizer()
                       ..onTap = () {
-                        // Action CGU
+                        // Action CGU.
                       },
                   ),
                 ],
